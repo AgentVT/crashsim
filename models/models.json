@@ -1,0 +1,46 @@
+{
+  "heli": {
+    "url": "apache.glb",
+    "credit": "\"Boeing AH-64D Apache Combat Helicopter\" by Muhamad Mirza Arrafi, CC BY 4.0",
+    "rotY": 90, "scale": 7.45, "pos": [0, 0.668, -0.3],
+    "rotor": { "center": [0.268, 0.157, 0], "yMin": 0.12, "rMin": 0.2, "rMax": 1.0 },
+    "tail": { "center": [-1.057, 0.078, -0.088], "r": 0.21, "zHalf": 0.045 },
+    "gun": { "pivot": [0.6, -0.28, 0], "muzzle": [0.95, -0.27, 0], "min": [0.45, -0.33, -0.05], "max": [0.97, -0.19, 0.05] },
+    "slots": { "materials": ["Missile", "Alpha_2"], "centers": [[0.3, -0.215, -0.272], [0.3, -0.215, -0.228], [0.3, -0.265, -0.272], [0.3, -0.265, -0.228], [0.3, -0.215, 0.22], [0.3, -0.215, 0.264], [0.3, -0.265, 0.22], [0.3, -0.265, 0.264]] },
+    "pods": [[0.3, -0.24, -0.16], [0.3, -0.24, 0.16]]
+  },
+  "b2": {
+    "url": "b2/scene.gltf",
+    "credit": "\"B2 Spirit\" by dannzjs, CC BY 4.0",
+    "rotY": 180, "scale": 1, "split": 3, "keepGear": true
+  },
+  "a10": {
+    "url": "a10.glb",
+    "credit": "\"A-10 Thunderbolt II - Free\" by bohmerang, CC BY-NC-SA 4.0",
+    "rotY": 90, "scale": 0.1, "split": 2, "keepGear": true, "dropNodes": ["landingOn"]
+  },
+  "c130": {
+    "url": "c130.glb",
+    "credit": "\"Lockheed C-130 Hercules\" by Dave Love, CC BY 4.0",
+    "rotY": 180, "scale": 1, "split": 3, "keepGear": true, "drop": ["wheel"],
+    "props": [
+      { "center": [4.97, 3.95, 5.73], "r": 2.1, "zHalf": 0.35 },
+      { "center": [10.05, 4.27, 5.73], "r": 2.1, "zHalf": 0.35 },
+      { "center": [-5.22, 3.95, 5.73], "r": 2.1, "zHalf": 0.35 },
+      { "center": [-10.31, 4.27, 5.73], "r": 2.1, "zHalf": 0.35 }
+    ]
+  },
+  "f18": {
+    "url": "f18.glb",
+    "credit": "\"Boeing F/A-18E Super Hornet\" by KOG_THORNS, CC BY 4.0",
+    "rotY": -90, "scale": 0.2, "keepGear": true, "dropBelow": -2.6,
+    "slots": { "boxes": [
+      { "min": [0.3, 1.6, 32.05], "max": [15.5, 3.4, 34] },
+      { "min": [-5.6, -1.0, 10.3], "max": [9.7, 0.95, 12.7] },
+      { "min": [-3.7, -1.0, 16.3], "max": [11.6, 0.95, 18.7] },
+      { "min": [0.3, 1.6, -34], "max": [15.5, 3.4, -32.05] },
+      { "min": [-5.6, -1.0, -12.7], "max": [9.7, 0.95, -10.3] },
+      { "min": [-3.7, -1.0, -18.7], "max": [11.6, 0.95, -16.3] }
+    ] }
+  }
+}

@@ -1,0 +1,12 @@
+# Only the game, its models and the co-op relay are tracked; notes, backups and unrelated files stay local.
+/*
+!/.gitignore
+!/README.md
+!/CREDITS.md
+!/CrashSima.html
+!/models/
+!/server.js
+!/package.json
+!/install-crash-mp.sh
+/models/*.prev.*
+node_modules/
