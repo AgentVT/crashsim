@@ -2205,13 +2205,16 @@ function missilesTick(dt) {
     }
     let prox = false;
     if (m.aa && m.air && age > 0.2) { // AIM-9: lead the aircraft by the time to reach it, up to 4.5 rad/s; the proximity fuse fires inside 9 m
-      const self = m.air === 'self', T = self ? (G.P.body && !G.P.destroyed ? G.P : null) : (!m.air.dead && m.air.P && m.air.pos ? m.air : null);
+      const fl = m.air.flare, self = m.air === 'self', T = fl ? (fl.dead ? null : fl) : self ? (G.P.body && !G.P.destroyed ? G.P : null) : (!m.air.dead && m.air.P && m.air.pos ? m.air : null);
       if (!T) m.air = null;
       else {
-        const tp = self ? rv(T.body.translation()) : T.pos.clone(), tv = self ? rv(T.body.linvel()) : new V3(...(T.st ? T.st.v : [0, 0, 0])), d = tp.distanceTo(m.p);
-        if (d < 9) prox = true;
-        const want = tp.addScaledVector(tv, d / Math.max(sp, 150)).sub(m.p).normalize(), cur = m.v.clone().normalize(), ang = Math.acos(clamp(cur.dot(want), -1, 1)), k = Math.min(1, 4.5 * dt / Math.max(ang, 1e-4));
-        m.v.copy(cur.lerp(want, k).normalize().multiplyScalar(sp));
+        const tp = fl ? fl.p.clone() : self ? rv(T.body.translation()) : T.pos.clone(), tv = fl ? fl.v.clone() : self ? rv(T.body.linvel()) : new V3(...(T.st ? T.st.v : [0, 0, 0])), d = tp.distanceTo(m.p);
+        if (fl && d < 9) m.air = null; // a decoyed missile flies through its flare and on, blind
+        else {
+          if (d < 9) prox = true;
+          const want = tp.addScaledVector(tv, d / Math.max(sp, 150)).sub(m.p).normalize(), cur = m.v.clone().normalize(), ang = Math.acos(clamp(cur.dot(want), -1, 1)), k = Math.min(1, 4.5 * dt / Math.max(ang, 1e-4));
+          m.v.copy(cur.lerp(want, k).normalize().multiplyScalar(sp));
+        }
       }
     }
     if (age < m.burn) { m.v.addScaledVector(m.v.clone().normalize(), m.acc * dt); sp = m.v.length(); if (sp > m.top) m.v.multiplyScalar(m.top / sp); }
@@ -2237,6 +2240,42 @@ function missilesTick(dt) {
     m.p.add(step); m.mesh.position.copy(m.p); m.mesh.quaternion.setFromUnitVectors(new V3(0, 0, -1), dir);
     if (age < m.burn) { PFX.add.spawn(m.p.clone(), dir.clone().multiplyScalar(-30), 0.08, m.hf ? 0.9 : 0.6, [5, 3, 1.2, 1], [1.2, 0.4, 0.1], 0, 6, 2);
       PFX.mix.spawn(m.p.clone(), rvec(1), m.hf ? 2.5 : 1.6, m.hf ? 2.2 : 1.5, [0.75, 0.73, 0.7, 0.55], [0.85, 0.84, 0.82], -0.3, 1.2, 0); }
+  }
+}
+// ============================================================ flares (hidden: Shift+F)
+// A salvo of six burning decoys thrown out behind and below. Every AIM-9 tracking the aircraft that drops them turns onto
+// the nearest flare, fuzes on it or flies on blind once it burns out. Co-op: the salvo goes to the other browsers too,
+// because the shooter's screen decides whether a missile hits.
+function dropFlares(P) {
+  if (!P || !P.body || P.destroyed || R.replay || G.simTime - (P.flareT ?? -9) < 2) return;
+  P.flareT = G.simTime;
+  const b = P.body, q = rq(b.rotation()), p = rv(b.translation()), v = rv(b.linvel()), f = new V3(0, 0, -1).applyQuaternion(q), r = new V3(1, 0, 0).applyQuaternion(q);
+  spawnFlares(p, v, f, r, 'self', P.S);
+  if (MP.on) MP.send({ t: 'flr', p: v3a(p), v: v3a(v), f: v3a(f), r: v3a(r), s: P.S });
+  flash('Flares', 0.8);
+}
+function spawnFlares(p, v, f, r, who, S = 1) {
+  const F = G.flares || (G.flares = []), salvo = [];
+  for (let k = 0; k < 6; k++) {
+    const side = k % 2 ? 1 : -1, out = r.clone().multiplyScalar(side * (9 + k * 3)).addScaledVector(f, -12 - k * 2).add(new V3(0, -6 - k, 0)).add(rvec(2));
+    const fl = { p: p.clone().addScaledVector(f, -2.5 * S).addScaledVector(r, side * 1.5 * S), v: v.clone().multiplyScalar(0.85).add(out), t0: G.simTime, life: 3.2 + rnd() * 0.6, dead: false };
+    F.push(fl); salvo.push(fl);
+  }
+  for (const m of G.missiles || []) if (m.aa && m.air && m.air === who) {
+    let best = null, bd = Infinity; for (const fl of salvo) { const d = fl.p.distanceTo(m.p); if (d < bd) { bd = d; best = fl; } }
+    m.air = { flare: best };
+  }
+  SFX.play('crunch', 0.14);
+}
+function flaresTick(dt) {
+  const F = G.flares; if (!F || !F.length) return;
+  for (let i = F.length - 1; i >= 0; i--) {
+    const fl = F[i], age = G.simTime - fl.t0;
+    fl.v.y -= 9.81 * 0.4 * dt; fl.v.multiplyScalar(1 - Math.min(1, 1.1 * dt)); fl.p.addScaledVector(fl.v, dt);
+    if (age > fl.life || fl.p.y < groundHeightAt(fl.p.x, fl.p.z) || (inRiver(fl.p.x) && fl.p.y < RIVER.y)) { fl.dead = true; F.splice(i, 1); continue; }
+    const k = 1 - age / fl.life;
+    PFX.add.spawn(fl.p.clone(), rvec(1.5), 0.12, 2.6 * (0.5 + 0.5 * k), [7, 5, 2.6, 1], [2.2, 0.9, 0.25], 0, 2, 2);
+    if (G.steps % 2 === 0) PFX.mix.spawn(fl.p.clone(), rvec(0.6), 2.4, 1.4, [0.86, 0.86, 0.86, 0.5], [0.94, 0.94, 0.94], -0.4, 1.2, 0);
   }
 }
 // ============================================================ optional 3D model files (GLB) for the aircraft
@@ -4184,6 +4223,7 @@ const MP = {
       case 'msl': launchMissile(m.hf, new V3(...m.p), new V3(...m.v), new V3(...m.d), m.hf === 'aa' ? (m.tr === this.id ? 'self' : this.remotes.get(m.tr) || null) // an AIM-9 is after this aircraft or another pilot
         : m.tz ? G.zombies && G.zombies.find(z => z.id === m.tz) : m.tp ? nearestTarget(new V3(...m.tp)) : null, m.from);
         if (m.hf === 'aa' && m.tr === this.id) flash(`${r ? r.name : 'Someone'} fired a missile at you`, 2.5); break;
+      case 'flr': if (r) spawnFlares(new V3(...m.p), new V3(...m.v), new V3(...m.f), new V3(...m.r), r, m.s || 1); break;
       case 'zp': if (!this.host) zbApply(m); break;
       case 'hit': case 'blast': { // the shooter saw it land on this aircraft: points come in this aircraft's own frame
         const P = G.P; if (!P || !P.body || P.destroyed) break;
@@ -4394,7 +4434,7 @@ function step(dt) {
   PERF.touchMs = lerp(PERF.touchMs || 0, performance.now() - tt0, 0.1);
   const tw0 = performance.now(); G.world.step();
   PERF.worldMs = lerp(PERF.worldMs || 0, performance.now() - tw0, 0.1);
-  roundsTick(dt); missilesTick(dt); MP.gunTick(dt);
+  roundsTick(dt); missilesTick(dt); flaresTick(dt); MP.gunTick(dt);
   const ts0 = performance.now(); if (R.replay) liveActive(); else { syncMeshes(); REC.capture(G.simTime); } PERF.syncMs = lerp(PERF.syncMs || 0, performance.now() - ts0, 0.1);
   fxTick(dt);
   PFX.add.update(dt); PFX.mix.update(dt);
@@ -4940,6 +4980,7 @@ function onKey(c, shift = false) {
   if (c === 'Escape' || c === 'KeyM') { R.menu ? closeMenu() : openMenu(); return; }
   if (c === 'Digit0') { if (shift) { setMute(undefined, !SET.muteVoice); flash(SET.muteVoice ? 'Voice off' : 'Voice on', 1); } else { setMute(!SET.mute); flash(SET.mute ? 'Sound off' : 'Sound on', 1); } return; }
   if (R.menu) return;
+  if (c === 'KeyF' && shift) { dropFlares(G.P); return; } // not in the help or the menu
   if (/^Digit[1-8]$/.test(c)) {
     const m = +c[5] - 1;
     if (shift) { VIEWS[1].mode = m; VIEWS[1].st = {}; CAM.layout = 1; }
