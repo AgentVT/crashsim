@@ -1668,7 +1668,7 @@ function buildPlane(spec, pos, quat, speed) {
   const s = spec.S, st = spec.style, prop = st === 'prop', a10 = st === 'a10', liner = st === 'wingjet', biz = st === 'rearjet', b2 = st === 'b2', c130 = st === 'c130', f18 = st === 'f18', mil = a10 || b2 || c130 || f18;
   const P = { spec, S: s, parts: {}, throttle: 0.9, inP: 0, inR: 0, inY: 0, boost: false, autopilot: false, apTarget: new V3(),
     prev: new V3(), expAcc: new V3(0, -9.81, 0), ticks: 0, crashed: false, destroyed: false, exploded: false,
-    peakG: 0, impactSpeed: 0, firstImpact: -1, fusDamage: 0, airspeed: 0, aoa: 0, gLoad: 1, stalled: false,
+    bornT: G.simTime, peakG: 0, impactSpeed: 0, firstImpact: -1, fusDamage: 0, airspeed: 0, aoa: 0, gLoad: 1, stalled: false,
     detached: 0, wreck: null, mass: spec.mass, cockpit: new V3(), wingCam: new V3(), propNode: null, halfSpan: 5,
     gun: !!spec.gun, ammo: spec.gun ? spec.ammo || 1150 : 0, nukes: spec.nukes || 0, aams: spec.aams || 0, hard: [], bombT: 0, firing: false, gunAcc: 0, muzzle: new V3() };
   { // parasite drag chosen so full throttle without boost levels off at the type's sea-level top speed
@@ -1964,7 +1964,7 @@ function buildHeli(spec, pos, quat, speed) {
   const s = spec.S;
   const P = { spec, S: s, heli: true, parts: {}, throttle: 0.5, inP: 0, inR: 0, inY: 0, boost: false, autopilot: false, apTarget: new V3(),
     prev: new V3(), expAcc: new V3(0, -9.81, 0), ticks: 0, crashed: false, destroyed: false, exploded: false,
-    peakG: 0, impactSpeed: 0, firstImpact: -1, fusDamage: 0, airspeed: 0, aoa: 0, gLoad: 1, stalled: false,
+    bornT: G.simTime, peakG: 0, impactSpeed: 0, firstImpact: -1, fusDamage: 0, airspeed: 0, aoa: 0, gLoad: 1, stalled: false,
     detached: 0, wreck: null, mass: spec.mass, cockpit: new V3(), wingCam: new V3(), propNode: null, halfSpan: 7.3 * s,
     gun: true, ammo: spec.ammo, nukes: 0, hard: [], bombT: 0, firing: false, gunAcc: 0, muzzle: new V3(),
     rockets: spec.rockets, hellfires: spec.hellfires, rkT: 0, hfT: 0, rkSide: 1, cd0: 0.03 };
@@ -2134,8 +2134,14 @@ function fireRocket(P) {
   if (MP.on) MP.send({ t: 'msl', hf: false, p: v3a(p), v: v3a(v), d: v3a(dir) });
   G.fired++;
 }
+// missiles stay safe for the first 5 s after each spawn
+function missilesArmed(P) {
+  const left = 5 - (G.simTime - (P.bornT ?? 0)); if (left <= 0) return true;
+  if (P === G.P && G.simTime - (P.armMsgT ?? -9) > 1) { P.armMsgT = G.simTime; flash(`Missiles arm in ${Math.ceil(left)} s`, 1); }
+  return false;
+}
 function fireHellfire(P) {
-  if (!P.hellfires || P.destroyed || R.replay || G.simTime - P.hfT < 0.6) return;
+  if (!P.hellfires || P.destroyed || R.replay || G.simTime - P.hfT < 0.6 || !missilesArmed(P)) return;
   const slot = P.hfMeshes.find(h => h.m.visible && P.parts[h.part].attached); if (!slot) return;
   P.hellfires--; P.hfT = G.simTime; slot.m.visible = false;
   const b = P.body, q = rq(b.rotation()), fwd = new V3(0, 0, -1).applyQuaternion(q), p = slot.local.clone().applyQuaternion(q).add(rv(b.translation()));
@@ -2161,7 +2167,7 @@ function aamTarget(P) {
   return best;
 }
 function fireAAM(P) {
-  if (!P.aams || P.destroyed || R.replay || G.simTime - (P.aamT ?? -9) < 0.8) return;
+  if (!P.aams || P.destroyed || R.replay || G.simTime - (P.aamT ?? -9) < 0.8 || !missilesArmed(P)) return;
   const slot = P.aamMeshes.find(h => h.m.visible && P.parts[h.part].attached); if (!slot) return;
   P.aams--; P.aamT = G.simTime; slot.m.visible = false;
   const b = P.body, q = rq(b.rotation()), fwd = new V3(0, 0, -1).applyQuaternion(q), p = slot.local.clone().applyQuaternion(q).add(rv(b.translation()));
@@ -4545,7 +4551,7 @@ const REC = {
 
 // ============================================================ cameras and views
 const VIEWS = [0, 1, 2, 3, 4].map(i => ({ cam: new THREE.PerspectiveCamera(70, 1, 0.3, 14000), mode: SET.modes[i] ?? 0, st: {}, rect: null }));
-const CAM = { fPos: new V3(), fLast: new V3(), fVel: new V3(), fDir: new V3(0, 0, -1), fInit: false,
+const CAM = { fPos: new V3(), fLast: new V3(), fVel: new V3(), fDir: new V3(0, 0, -1), fUp: new V3(0, 1, 0), fInit: false,
   orbitYaw: 0.7, orbitPitch: 0.3, orbitDist: -1, drag: false, freePos: new V3(), freeYaw: 0, freePitch: -0.2, freeInit: false, hovered: 0, layout: SET.layout };
 function layoutRects() {
   const W = innerWidth, H = innerHeight;
@@ -4568,25 +4574,35 @@ function look(cam, eye, tgt, up = UP) {
 const zoomFov = (d, size, mul, lo, hi) => clamp(2 * Math.atan(size * mul / Math.max(d, 1)) * 180 / Math.PI, lo, hi);
 function camTick(dt, realDt) {
   const f = focusEnt(), p = f.obj.position.clone();
-  if (!CAM.fInit || p.distanceTo(CAM.fLast) > 400) { CAM.fInit = true; CAM.fLast.copy(p); CAM.fVel.set(0, 0, 0); CAM.fDir.set(0, 0, -1).applyQuaternion(G.P.ent.obj.quaternion); }
+  if (!CAM.fInit || p.distanceTo(CAM.fLast) > 400) { CAM.fInit = true; CAM.fLast.copy(p); CAM.fVel.set(0, 0, 0); CAM.fDir.set(0, 0, -1).applyQuaternion(G.P.ent.obj.quaternion); CAM.fUp.set(0, 1, 0); }
   const vel = p.clone().sub(CAM.fLast).divideScalar(Math.max(dt, 1e-4)); CAM.fLast.copy(p);
-  CAM.fVel.lerp(vel, 0.2);
-  if (f === G.P.pilotEnt && G.P.onFoot) CAM.fDir.lerp(new V3(-Math.sin(f.yaw), 0, -Math.cos(f.yaw)), 0.12).normalize(); // behind the walking pilot
-  else if (CAM.fVel.length() > 4) CAM.fDir.lerp(CAM.fVel.clone().normalize(), 0.15).normalize();
+  // smoothing by time, not per frame, so a slow machine does not lag further behind
+  CAM.fVel.lerp(vel, 1 - Math.exp(-dt * 14));
+  const P = G.P, flying = f === P.ent && !P.crashed && !P.destroyed && !R.replay, kd = 1 - Math.exp(-dt * 9);
+  if (f === P.pilotEnt && P.onFoot) CAM.fDir.lerp(new V3(-Math.sin(f.yaw), 0, -Math.cos(f.yaw)), kd).normalize(); // behind the walking pilot
+  else if (flying) { // in the air: mostly the nose, a little of the flight path, so a hard turn stays behind the aircraft instead of out to the side
+    const q = f.obj.quaternion, nose = new V3(0, 0, -1).applyQuaternion(q), want = CAM.fVel.length() > 4 ? nose.multiplyScalar(0.7).addScaledVector(CAM.fVel.clone().normalize(), 0.3) : nose;
+    CAM.fDir.lerp(want.normalize(), 1 - Math.exp(-dt * 12)).normalize();
+  }
+  else if (CAM.fVel.length() > 4) CAM.fDir.lerp(CAM.fVel.clone().normalize(), kd).normalize();
+  // the chase view banks most of the way with the aircraft, and levels out again on the ground
+  const upW = flying ? new V3(0, 1, 0).applyQuaternion(f.obj.quaternion).multiplyScalar(0.75).add(new V3(0, 0.25, 0)) : new V3(0, 1, 0);
+  if (upW.lengthSq() < 0.01) upW.set(0, 1, 0);
+  CAM.fUp.lerp(upW.normalize(), 1 - Math.exp(-dt * 6)).normalize();
   CAM.fPos.copy(p);
   const wantS = f.kind === 'person' ? 0.32 : G.P.S; CAM.S = CAM.S === undefined ? wantS : lerp(CAM.S, wantS, 1 - Math.exp(-realDt * 2)); // camera distances shrink to a person's size
   for (const v of VIEWS) if (v.rect) rig(v, dt, realDt);
 }
 function chase(v, dt, S) {
-  let want = CAM.fPos.clone().addScaledVector(CAM.fDir, -16 * S).add(new V3(0, 4.5 * S, 0)); want.y = Math.max(want.y, 1);
+  let want = CAM.fPos.clone().addScaledVector(CAM.fDir, -16 * S).addScaledVector(CAM.fUp, 4.5 * S); want.y = Math.max(want.y, 1);
   if (!R.replay) {
     const d = want.clone().sub(CAM.fPos), dist = d.length(); d.normalize();
     const hit = G.world.castRay(new RAPIER.Ray(CAM.fPos, d), dist, false, RAPIER.QueryFilterFlags.EXCLUDE_DYNAMIC);
     if (hit) want = CAM.fPos.clone().addScaledVector(d, Math.max((hit.toi ?? hit.timeOfImpact) - 1.5, 1.5));
   }
   if (!v.st.p || v.st.p.distanceTo(want) > 400) v.st.p = want.clone();
-  v.st.p.lerp(want, 1 - Math.exp(-dt * 6));
-  look(v.cam, v.st.p, CAM.fPos.clone().addScaledVector(CAM.fDir, 6 * S)); v.cam.fov = 70;
+  v.st.p.lerp(want, 1 - Math.exp(-dt * 10));
+  look(v.cam, v.st.p, CAM.fPos.clone().addScaledVector(CAM.fDir, 6 * S), CAM.fUp); v.cam.fov = 70;
 }
 function rig(v, dt, realDt) {
   const cam = v.cam, st = v.st, P = G.P, S = CAM.S ?? P.S, size = 9 * S, pobj = P.ent.obj;
