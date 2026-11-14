@@ -40,10 +40,11 @@
   #thr { right: 28px; bottom: 28px; width: 64px; height: 200px; border-radius: 12px; background: rgba(10,12,16,0.45); border: 1px solid rgba(255,255,255,0.3); overflow: hidden; }
   #thrfill { position: absolute; left: 0; right: 0; bottom: 0; background: rgba(77,230,102,0.55); pointer-events: none; }
   #thrlbl { position: absolute; left: 0; right: 0; top: 6px; text-align: center; font: 600 12px system-ui; color: #fff; pointer-events: none; }
-  #bar { left: 0; right: 0; margin: 0 auto; width: max-content; bottom: 18px; display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; max-width: calc(100vw - 440px); pointer-events: none; position: absolute; }
+  #bar { left: 0; right: 0; margin: 0 auto; width: max-content; bottom: 18px; display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; max-width: calc(100vw - 560px); pointer-events: none; position: absolute; }
   #bar .tbtn { width: 58px; height: 50px; pointer-events: auto; touch-action: none; }
   #touchToggle { position: fixed; top: 48px; left: 50%; transform: translateX(-50%); width: auto; height: 34px; padding: 0 14px; z-index: 5; touch-action: manipulation; }
   @media (max-width: 760px) { #bar { max-width: calc(100vw - 32px); bottom: 240px; } }
+  @media (max-width: 520px) { #flares { left: 28px !important; bottom: 214px !important; } #ejectB { left: 96px !important; bottom: 214px !important; } }
 </style>
 <script type="importmap">
 { "imports": {
@@ -66,6 +67,8 @@
   <button class="tbtn" id="fire" style="right:28px;bottom:240px;width:134px;height:64px;font-size:17px;border-color:#ff7a50">FIRE</button>
   <button class="tbtn" id="bomb" style="right:28px;bottom:314px;width:134px;height:52px;font-size:16px;border-color:#d9b31a">BOMB</button>
   <button class="tbtn" id="nuke" style="right:28px;bottom:376px;width:134px;height:52px;font-size:16px;border-color:#ff6a3d">NUKE</button>
+  <button class="tbtn" id="flares" style="left:210px;bottom:96px;width:58px;height:58px;font-size:18px">F</button>
+  <button class="tbtn" id="ejectB" style="left:210px;bottom:28px;width:58px;height:58px;font-size:18px">E</button>
   <div id="bar"></div>
 </div>
 <button class="tbtn" id="touchToggle">Touch controls</button>
@@ -5178,6 +5181,8 @@ holdBtn(document.getElementById('boost'), () => TOUCH.boost = true, () => TOUCH.
 holdBtn(document.getElementById('fire'), () => TOUCH.fire = true, () => TOUCH.fire = false);
 holdBtn(document.getElementById('bomb'), () => TOUCH.bomb = true, () => TOUCH.bomb = false);
 holdBtn(document.getElementById('nuke'), () => TOUCH.nuke = true, () => TOUCH.nuke = false);
+holdBtn(document.getElementById('flares'), () => onKey('KeyF', true), () => {}); // flares
+holdBtn(document.getElementById('ejectB'), () => onKey('KeyE', true), () => {}); // eject
 const BAR_LIVE = [['MUTE', 'Digit0', () => SET.mute], ['CAM', 'KeyC'], ['VIEW', 'KeyV'], ['SLOW', 'KeyT', () => R.slowmo], ['REPLAY', 'KeyY'], ['AUTO', 'KeyO', () => G.P.autopilot], ['GEAR', 'KeyG', () => G.P.gearDown], ['RETRY', 'KeyR'], ['NEXT', 'KeyN'], ['MENU', 'KeyM']];
 const BAR_REPLAY = [['PLAY', 'Space'], ['-1 s', 'ArrowLeft'], ['+1 s', 'ArrowRight'], ['SLOWER', 'ArrowDown'], ['FASTER', 'ArrowUp'], ['IMPACT', 'Home'], ['CAM', 'KeyC'], ['VIEW', 'KeyV'], ['LIVE', 'KeyY']];
 const barEl = document.getElementById('bar'); let barMode = '';
@@ -5199,6 +5204,9 @@ function touchTick() {
   const flying = !R.replay;
   for (const id of ['stick', 'thr', 'rudL', 'rudR', 'boost']) document.getElementById(id).style.visibility = flying ? 'visible' : 'hidden';
   document.getElementById('fire').style.visibility = flying && G.P.gun ? 'visible' : 'hidden';
+  const inAir = flying && G.P.body && !G.P.destroyed && !G.P.ejected && !G.P.onFoot;
+  document.getElementById('flares').style.visibility = inAir ? 'visible' : 'hidden';
+  document.getElementById('ejectB').style.visibility = inAir ? 'visible' : 'hidden';
   document.getElementById('bomb').style.visibility = flying && ((G.P.hard && G.P.hard.length) || G.P.heli) ? 'visible' : 'hidden';
   document.getElementById('nuke').style.visibility = flying && (G.P.nukes || G.P.heli || G.P.aamMeshes) ? 'visible' : 'hidden';
   document.getElementById('bomb').textContent = G.P.heli ? 'ROCKETS' : 'BOMB'; document.getElementById('nuke').textContent = G.P.heli ? 'HELLFIRE' : G.P.aamMeshes ? 'MISSILE' : 'NUKE';
