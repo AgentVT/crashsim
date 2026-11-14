@@ -515,6 +515,8 @@ const BGEO = { tree: treeGeo(), car: carGeo() };
 SHARDS.forEach((sh, k) => { const g = sh.geo; g.computeBoundingBox(); const uv = []; const P2 = g.attributes.position; for (let i = 0; i < P2.count; i++) uv.push(P2.getX(i) + P2.getZ(i) + 0.5, P2.getY(i) + 0.5); g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2)); BGEO['shard' + k] = g; });
 // instance capacity per batch: an add past the cap is not drawn, so these must cover the whole city with room to spare
 const BCAP = { win: 130000, solid: 120000, crate: 200, chunk: 5000, tree: 3600, car: 10000, shard0: 1500, shard1: 1500, shard2: 1500, shard3: 1500, shard4: 1500, shard5: 1500 };
+// torn aircraft skin and shed panels: the same lumpy hulls as rubble, drawn with the metal chunk material instead of a scaled box
+for (let k = 0; k < 6; k++) { BGEO['flake' + k] = BGEO['shard' + k]; BMAT['flake' + k] = BMAT.chunk; BCAP['flake' + k] = 700; }
 // Amazon warehouse: the wall sign is 5 x 2 wall blocks, each drawing its slice of the logo; and cardboard boxes
 BMAT.abox = new THREE.MeshStandardMaterial({ map: TEX.amzBox, roughness: 0.95 }); BCAP.abox = 400;
 for (let r = 0; r < 2; r++) for (let c = 0; c < 5; c++) {
@@ -669,9 +671,9 @@ function groundHeightAt(x, z) {
   const lx = clamp(x - (t.cx - TILE / 2), 0, TN - 0.001), lz = clamp(z - (t.cz - TILE / 2), 0, TN - 0.001), a = Math.floor(lx), b = Math.floor(lz), fx = lx - a, fz = lz - b, n = TN + 1;
   return lerp(lerp(t.h[a * n + b], t.h[(a + 1) * n + b], fx), lerp(t.h[a * n + b + 1], t.h[(a + 1) * n + b + 1], fx), fz);
 }
-const SCORCH = new THREE.Color().setRGB(0.16, 0.12, 0.09, THREE.SRGBColorSpace);
+const SCORCH = new THREE.Color().setRGB(0.03, 0.022, 0.016, THREE.SRGBColorSpace);
 function crater(x, z, r, D) {
-  const R2 = r * 1.4, n = TN + 1;
+  const y0 = groundHeightAt(x, z), R2 = r * 1.4, n = TN + 1;
   const ix0 = Math.floor((x - R2 - TX0) / TILE), ix1 = Math.floor((x + R2 - TX0) / TILE), iz0 = Math.floor((z - R2 - TZ0) / TILE), iz1 = Math.floor((z + R2 - TZ0) / TILE);
   let any = false;
   for (let ix = ix0; ix <= ix1; ix++) for (let iz = iz0; iz <= iz1; iz++) {
@@ -684,17 +686,53 @@ function crater(x, z, r, D) {
       const hi = c * n + row;
       if (d < r) t.h[hi] = Math.max(t.h[hi] - D * (1 - (d / r) ** 2), -30);
       else t.h[hi] += 0.25 * D * Math.sin(Math.PI * (d - r) / (R2 - r));
-      const k = clamp(1.15 - d / (1.25 * r), 0, 1) * 0.85, vi = (row * n + c) * 3;
+      const k = clamp(1.35 - d / r, 0, 1), vi = (row * n + c) * 3;
       cols[vi] = lerp(cols[vi], SCORCH.r, k); cols[vi + 1] = lerp(cols[vi + 1], SCORCH.g, k); cols[vi + 2] = lerp(cols[vi + 2], SCORCH.b, k);
     }
     t.dirtyMesh = true; t.dirtyCol = true;
   }
   if (!any) return;
   G.craters++;
+  // a burnt patch on top of the bowl: the vertex tint only darkens the very centre, and from the tower it reads as nothing
   const c3 = new V3(x, groundHeightAt(x, z), z);
   for (const e of G.ents) if (!e.glued && (e.body || e.dormant) && e.obj.position.distanceTo(c3) < R2 + 6) (e.body || wakeEnt(e)).wakeUp();
   unglueList(gluedIn(new V3(x, 1, z), r * 0.8), new V3(), 2, c3, r);
   if (r > 1) PFX.burst(false, c3.clone().add(new V3(0, 0.5, 0)), Math.round(clamp(r * 6, 10, 50)), 4, r * 1.2, [0.42, 0.34, 0.24, 0.9], [0.5, 0.45, 0.38], r * 2, r * 5, -4, 1.2, 3);
+  if (r > 1.2) scorchDecal(x, z, r * 2.6, y0 + 0.25);
+}
+let _decalGeo, _decalMat;
+function scorchDecal(x, z, r, y) {
+  if (!_decalGeo) {
+    _decalGeo = new THREE.CircleGeometry(1, 28);
+    _decalMat = new THREE.MeshBasicMaterial({ transparent: true, depthWrite: false, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -4, map: canvasTex(256, 256, g => {
+      g.clearRect(0, 0, 256, 256); g.beginPath();
+      for (let i = 0; i <= 40; i++) { const a = i / 40 * Math.PI * 2, w = 0.72 + 0.28 * Math.sin(a * 3) * Math.sin(a * 7 + 1.2); const px = 128 + Math.cos(a) * 122 * w, py = 128 + Math.sin(a) * 122 * w; i ? g.lineTo(px, py) : g.moveTo(px, py); }
+      g.closePath(); g.clip();
+      const rad = g.createRadialGradient(128, 128, 6, 128, 128, 120);
+      rad.addColorStop(0, 'rgba(6,5,4,0.95)'); rad.addColorStop(0.28, 'rgba(18,13,9,0.8)'); rad.addColorStop(0.62, 'rgba(42,32,22,0.4)'); rad.addColorStop(1, 'rgba(42,32,22,0)');
+      g.fillStyle = rad; g.fillRect(0, 0, 256, 256);
+    }) });
+  }
+  if (!G.decals) G.decals = [];
+  const m = G.decals.length >= 10 ? G.decals.shift() : new THREE.Mesh(_decalGeo, _decalMat);
+  if (!m.parent) { m.renderOrder = 2; G.root.add(m); }
+  m.position.set(x, y == null ? groundHeightAt(x, z) + 0.2 : y, z); m.rotation.set(-Math.PI / 2, 0, rnd() * 6.3); m.scale.setScalar(Math.max(r, 0.5));
+  m.userData.t = G.simTime; m.visible = true; G.decals.push(m);
+}
+// aircraft into the ground: a wider bowl, a dirt skirt that stays low, clods, a fire that sits on the scar, and a kick of the camera
+function groundImpact(P, hit, dvl) {
+  if (G.simTime - (P.lastCrater ?? -9) <= 0.3) return;
+  P.lastCrater = G.simTime;
+  const sp = Math.max(dvl, P.prev.length()), e = clamp(sp / 32, 0.5, 2.2), S = P.S;
+  const cr = clamp(Math.cbrt(0.5 * P.mass * sp * sp) * 0.016, 2.4, 16);
+  crater(hit.x, hit.z, cr, cr * (0.32 + 0.14 * Math.min(e, 1.4)));
+  const p = hit.clone(); p.y = groundHeightAt(hit.x, hit.z) + 0.4;
+  const n = Math.round(48 * e), out = (4 + 9 * e) * Math.sqrt(S);
+  PFX.burst(false, p, n, 5 + e, (1.4 + e) * Math.sqrt(S), [0.5, 0.4, 0.28, 0.92], [0.68, 0.58, 0.46], out * 0.25, out, 0.45, 1.05, 3, true);
+  PFX.burst(false, p, Math.round(22 * e), 7, (1.8 + e) * S * 0.7, [0.4, 0.34, 0.26, 0.75], [0.58, 0.52, 0.44], 1.2, 3.5 * e, 1.1, 0.55, 0);
+  gritBurst(p, new V3(S, 0.35, S), new V3(0, 2.5 * e, 0), 7 * e, Math.round(70 * e), new THREE.Color(0x6b5138), 0.05, 0.16 + 0.14 * e);
+  if (sp > 16) G.fires.push({ pos: p.clone(), size: (0.65 + 0.45 * e) * S, until: G.simTime + 38 });
+  if (P === G.P) { R.shake = Math.max(R.shake, clamp(sp / 15, 0.5, 4.8)); R.flash = Math.max(R.flash, clamp(sp / 100, 0.12, 0.42)); }
 }
 function tileTick() {
   for (const t of G.convTiles) {
@@ -2593,11 +2631,9 @@ function impact(P, cs, dvl, dt, pos, q) {
   if (nrm.dot(P.prev) > 0) nrm.negate();
   P.peakG = Math.max(P.peakG, dvl / dt / 9.81);
   if (dvl > 5) { markImpact(P); ohNo(P); }
-  if (dvl > 20 && cs.some(c => c.ground) && G.simTime - (P.lastCrater ?? -9) > 0.3) {
-    P.lastCrater = G.simTime;
-    const cr = clamp(Math.cbrt(0.5 * P.mass * P.prev.lengthSq()) * 0.011, 1, 12);
-    crater(hit.x, hit.z, cr, cr * 0.35);
-  }
+  const grounded = cs.some(c => c.ground) || hit.y - groundHeightAt(hit.x, hit.z) < Math.max(1.4, P.S * 0.8);
+  if (grounded && dvl > 11) groundImpact(P, hit, dvl);
+  else if (P === G.P && dvl > 12) R.shake = Math.max(R.shake, clamp(dvl / 18, 0.35, 3.2));
   onHit(hit, dvl);
   const detach = [];
   for (const [nm, p] of Object.entries(P.parts)) {
@@ -2627,7 +2663,7 @@ function impact(P, cs, dvl, dt, pos, q) {
   const wingLost = detach.includes('wing_l') || detach.includes('wing_r');
   if (!P.exploded && dvl > 16 && (full || wingLost)) {
     P.exploded = true;
-    explosion(hit.clone().add(new V3(0, P.S, 0)), 5 * P.S, 9000 * P.S * P.S);
+    explosion(hit.clone().add(new V3(0, P.S * 0.35, 0)), 5 * P.S, 9000 * P.S * P.S, false, grounded ? 0.08 : 0.5);
     timer(0.12, () => igniteNear(hit, 14 * P.S));
   }
   // occupants: a section that tears open throws out the people in it; a full break-up throws out everyone
@@ -3187,9 +3223,16 @@ function cookOff(e) {
   }
 }
 function scatter(v, n) {
-  const vn = v.dot(n); const r = v.clone();
-  if (vn < 0) r.addScaledVector(n, -vn * 1.12);
-  return r.multiplyScalar(0.7).add(rvec(v.length() * 0.12));
+  const r = v.clone();
+  // into the ground: keep the slide, a short hop, then friction. A full reflection throws the wreck straight up in a column of plates.
+  if (n.y > 0.55) {
+    const hop = 0.4 + Math.max(0, -r.y) * 0.04;
+    r.x *= 0.82; r.z *= 0.82; r.y = Math.min(hop, 2.2);
+    return r.add(rvec(Math.min(3.5, v.length() * 0.04)));
+  }
+  const vn = r.dot(n);
+  if (vn < 0) r.addScaledVector(n, -vn * 0.42);
+  return r.multiplyScalar(0.7).add(rvec(v.length() * 0.08));
 }
 
 // dents: push vertices near the contact inward, scaled by the velocity change
@@ -3226,11 +3269,14 @@ function dent(P, hit, nrm, dvl, pos, q) {
 function hash3(x, y, z) { const h = Math.sin(x * 127.1 + y * 311.7 + z * 74.7) * 43758.5453; return h - Math.floor(h); }
 // skin panels torn off at each hard contact
 function shed(P, hit, nrm, dvl) {
-  const n = Math.min(Math.floor((dvl - 3) / 2.5), 7, 70 - P.shed); if (n <= 0) return;
+  const n = Math.min(Math.floor((dvl - 3) / 2.2), 9, 80 - P.shed); if (n <= 0) return;
   P.shed += n; const S = P.S;
   for (let k = 0; k < n; k++) {
-    const sz = new V3((0.25 + rnd() * 0.5) * S, 0.05 * S, (0.2 + rnd() * 0.45) * S);
-    const vel = P.prev.clone().multiplyScalar(0.35 + rnd() * 0.35).addScaledVector(nrm, 2 + rnd() * 5).add(rvec(4));
+    const sz = new V3((0.16 + rnd() * 0.5) * S, (0.04 + rnd() * 0.12) * S, (0.14 + rnd() * 0.45) * S);
+    if (rnd() < 0.45) { const t = sz.y; sz.y = sz.x; sz.x = t; } // not every torn panel lies flat like a card
+    const vel = P.prev.clone().multiplyScalar(0.32 + rnd() * 0.28);
+    if (nrm.y > 0.55) vel.y = rnd() * 3; else vel.addScaledVector(nrm, 2 + rnd() * 4);
+    vel.add(rvec(nrm.y > 0.55 ? 5 : 3));
     const rq2 = new Q4().setFromEuler(new THREE.Euler(rnd() * 6.3, rnd() * 6.3, rnd() * 6.3));
     spawnChunk(hit.clone().addScaledVector(nrm, 0.4 * S).add(rvec(0.6 * S)), rq2, sz, rnd() < 0.25 ? new THREE.Color(0x3a3c40) : P.bodyC, Math.max(2, P.mass * 0.0006), vel, rvec(12));
   }
@@ -3251,12 +3297,12 @@ function detachPart(P, nm, vel, w) {
   const p = P.parts[nm]; if (!p.attached) return null;
   p.attached = false; P.detached++;
   const t = P.body.translation(), r = P.body.rotation();
-  const sp = w.clone().add(rvec(1));
+  const sp = w.clone().add(rvec(2.4));
   const body = G.world.createRigidBody(RAPIER.RigidBodyDesc.dynamic().setTranslation(t.x, t.y, t.z).setRotation(r)
-    .setLinvel(vel.x, vel.y, vel.z).setAngvel(sp).setCcdEnabled(true).setLinearDamping(0.04).setAngularDamping(0.5));
+    .setLinvel(vel.x, vel.y, vel.z).setAngvel(sp).setCcdEnabled(true).setLinearDamping(0.06).setAngularDamping(0.22));
   for (const cd of p.cdefs) {
     const c = G.world.createCollider(RAPIER.ColliderDesc.cuboid(cd.he.x, cd.he.y, cd.he.z).setTranslation(cd.pos.x, cd.pos.y, cd.pos.z)
-      .setRotation(cd.q).setMass(cd.mass).setFriction(0.45).setRestitution(0.12).setCollisionGroups(G_FRESH), body);
+      .setRotation(cd.q).setMass(cd.mass).setFriction(0.82).setRestitution(0.05).setCollisionGroups(G_FRESH), body);
     G.colColor.set(c.handle, cd.col);
   }
   for (const c of p.cols) G.world.removeCollider(c, true);
@@ -3308,12 +3354,14 @@ function shardBlock(e, extra = 1.5, fine = false) {
   return true;
 }
 function spawnChunk(pos, q, size, col, mass, vel, spin) {
+  const md = Math.max(size.x, size.y, size.z), thin = Math.min(size.x, size.y, size.z) < md * 0.42;
+  const key = (md < 2.2 || thin) ? 'flake' + (Math.floor(rnd() * 6)) : 'chunk';
   const body = G.world.createRigidBody(RAPIER.RigidBodyDesc.dynamic().setTranslation(pos.x, pos.y, pos.z).setRotation(q)
-    .setLinvel(vel.x, vel.y, vel.z).setAngvel(spin).setLinearDamping(0.04).setAngularDamping(0.5));
+    .setLinvel(vel.x, vel.y, vel.z).setAngvel(spin).setLinearDamping(0.08).setAngularDamping(0.22).setCcdEnabled(mass > 50 || (md > 0.45 && vel.length() > 36)));
   const c = G.world.createCollider(RAPIER.ColliderDesc.cuboid(size.x / 2, size.y / 2, size.z / 2).setMass(mass)
-    .setFriction(0.5).setRestitution(0.12).setCollisionGroups(G_FRESH), body);
+    .setFriction(0.86).setRestitution(0.05).setCollisionGroups(G_FRESH), body);
   G.colColor.set(c.handle, col);
-  const e = addEnt(body, batchedObj('chunk', size, pos, q, col), { kind: 'chunk', mass, noAdd: true });
+  const e = addEnt(body, batchedObj(key, size, pos, q, col), { kind: 'chunk', mass, noAdd: true });
   Object.assign(e, { canShatter: false, prev: vel.clone(), started: false, cool: 0 });
   G.parts.push(e);
   freshTimer(e, 0.2);
@@ -3374,7 +3422,7 @@ function burntMat(src) {
 }
 function shatter(e, vpre, nrm) {
   const body = e.body; if (!body) return [];
-  if (!e.obj.isObject3D || G.fragN > 420 || e.obj.isInstancedMesh || !e.obj.children) return shatterBoxes(e, vpre, nrm);
+  if (!e.obj.isObject3D || G.fragN > 560 || e.obj.isInstancedMesh || !e.obj.children) return shatterBoxes(e, vpre, nrm);
   if (nrm.dot(vpre) > 0) nrm = nrm.clone().negate();
   const w = rv(body.angvel()), com = rv(body.worldCom()), S = G.P ? G.P.S : 1;
   const mass = e.kind === 'plane' ? G.P.mass : e.mass;
@@ -3386,13 +3434,13 @@ function shatter(e, vpre, nrm) {
   for (const m of meshes) {
     const g = m.geometry.index ? m.geometry.toNonIndexed() : m.geometry, P2 = g.attributes.position, nt = P2.count / 3, mw = m.matrixWorld;
     const bb = new THREE.Box3().setFromBufferAttribute(P2).applyMatrix4(mw), dim = bb.getSize(new V3()), md = Math.max(dim.x, dim.y, dim.z);
-    const cell = md < 1.3 * S ? 1e9 : Math.max(md / 4.5, 0.75 * S), groups = new Map();
+    const cell = md < 0.85 * S ? 1e9 : Math.max(md / 7, 0.46 * S), groups = new Map();
     for (let ti = 0; ti < nt; ti++) {
       // triangles go in pairs (one quad); cutting by the quad's centre keeps torn edges ragged but not sawtoothed
       const t0 = ti & ~1, tn = Math.min(t0 + 2, nt); c.set(0, 0, 0);
       for (let tq = t0; tq < tn; tq++) for (let k = 0; k < 3; k++) c.add(v.fromBufferAttribute(P2, tq * 3 + k).applyMatrix4(mw));
       c.divideScalar((tn - t0) * 3);
-      const jx = (vnoise(c.y * 0.7 + 3, c.z * 0.7) - 0.5) * cell * 0.6, jz = (vnoise(c.x * 0.7 + 7, c.y * 0.7) - 0.5) * cell * 0.6, jy = (vnoise(c.z * 0.7, c.x * 0.7 + 1) - 0.5) * cell * 0.6;
+      const jx = (vnoise(c.y * 0.7 + 3, c.z * 0.7) - 0.5) * cell * 0.9, jz = (vnoise(c.x * 0.7 + 7, c.y * 0.7) - 0.5) * cell * 0.9, jy = (vnoise(c.z * 0.7, c.x * 0.7 + 1) - 0.5) * cell * 0.9;
       const key = Math.floor((c.x + jx) / cell) + ',' + Math.floor((c.y + jy) / cell) + ',' + Math.floor((c.z + jz) / cell);
       let l = groups.get(key); if (!l) groups.set(key, l = []); l.push(ti);
     }
@@ -3400,22 +3448,28 @@ function shatter(e, vpre, nrm) {
     triTotal += nt;
   }
   frags.sort((a, b) => b.tl.length - a.tl.length);
-  const keep = frags.slice(0, Math.max(8, Math.min(70, 440 - (G.fragN || 0)))), out = [];
+  const room = Math.max(8, Math.min(96, 560 - (G.fragN || 0))), keep = [];
+  let covered = 0;
+  for (const f of frags) { if (keep.length >= room) break; keep.push(f); covered += f.tl.length; if (keep.length >= 16 && covered >= triTotal * 0.92) break; }
+  const out = [];
   for (const { m, g, tl, mw } of keep) {
     const P2 = g.attributes.position, U = g.attributes.uv, pos = new Float32Array(tl.length * 9), uv = U ? new Float32Array(tl.length * 6) : null, box = new THREE.Box3(), ctr = new V3();
     tl.forEach((ti, j) => { for (let k = 0; k < 3; k++) { const q = ti * 3 + k, o = (j * 3 + k); v.fromBufferAttribute(P2, q).applyMatrix4(mw); pos[o * 3] = v.x; pos[o * 3 + 1] = v.y; pos[o * 3 + 2] = v.z; box.expandByPoint(v); if (uv) { uv[o * 2] = U.getX(q); uv[o * 2 + 1] = U.getY(q); } } });
-    box.getCenter(ctr); const sz = box.getSize(new V3()), amp = Math.min(0.12 * S, Math.max(sz.x, sz.y, sz.z) * 0.08), kf = 0.8 / S;
-    for (let i = 0; i < pos.length; i += 3) { // smooth noise field: panels bend and buckle instead of growing spikes
+    box.getCenter(ctr); const sz = box.getSize(new V3()), ext = Math.max(sz.x, sz.y, sz.z), amp = Math.min(0.2 * S, ext * 0.13), kf = 1.15 / S;
+    for (let i = 0; i < pos.length; i += 3) { // buckle in the middle, a stronger jag on the torn edge so the cut is not a rectangle
       const x = pos[i], y = pos[i + 1], z = pos[i + 2];
-      pos[i] = x - ctr.x + (vnoise(y * kf + 3, z * kf) - 0.5) * amp; pos[i + 1] = y - ctr.y + (vnoise(z * kf, x * kf + 7) - 0.5) * amp * 1.6; pos[i + 2] = z - ctr.z + (vnoise(x * kf + 11, y * kf) - 0.5) * amp;
+      const ex = Math.abs(x - ctr.x) / (sz.x * 0.5 + 0.05), ey = Math.abs(y - ctr.y) / (sz.y * 0.5 + 0.05), ez = Math.abs(z - ctr.z) / (sz.z * 0.5 + 0.05);
+      const jag = amp * (1 + smooth01((Math.max(ex, ey, ez) - 0.5) / 0.5) * 1.7);
+      pos[i] = x - ctr.x + (vnoise(y * kf + 3, z * kf) - 0.5) * jag; pos[i + 1] = y - ctr.y + (vnoise(z * kf, x * kf + 7) - 0.5) * jag * 1.35; pos[i + 2] = z - ctr.z + (vnoise(x * kf + 11, y * kf) - 0.5) * jag;
     }
     const geo = new THREE.BufferGeometry(); geo.setAttribute('position', new THREE.BufferAttribute(pos, 3)); if (uv) geo.setAttribute('uv', new THREE.BufferAttribute(uv, 2)); geo.computeVertexNormals();
     const mat = burntMat(m.material), fm = new THREE.Mesh(geo, mat); fm.castShadow = fm.receiveShadow = true; fm.position.copy(ctr);
-    const fmass = Math.max(mass * tl.length / triTotal, 2), vel = scatter(vpre.clone().add(w.clone().cross(ctr.clone().sub(com))), nrm);
+    const rel = ctr.clone().sub(com), fmass = Math.max(mass * tl.length / triTotal, 2), vel = scatter(vpre.clone().add(w.clone().cross(rel)), nrm);
+    if (nrm.y > 0.55 && rel.length() > 0.3) { const outV = rel.clone(); outV.y *= 0.15; const L = outV.length() || 1; vel.addScaledVector(outV, Math.min(6.5, 1.8 + rel.length() * 0.22) / L); }
     const fb = G.world.createRigidBody(RAPIER.RigidBodyDesc.dynamic().setTranslation(ctr.x, ctr.y, ctr.z).setLinvel(vel.x, vel.y, vel.z)
-      .setAngvel(w.clone().multiplyScalar(0.5).add(rvec(3))).setLinearDamping(0.05).setAngularDamping(0.4).setCcdEnabled(fmass > 150));
+      .setAngvel(w.clone().multiplyScalar(0.55).add(rvec(6))).setLinearDamping(0.07).setAngularDamping(0.2).setCcdEnabled(fmass > 80 || vel.length() > 40));
     const he = sz.clone().multiplyScalar(0.5).max(new V3(0.05 * S, 0.05 * S, 0.05 * S));
-    const col = G.world.createCollider(RAPIER.ColliderDesc.cuboid(he.x, he.y, he.z).setMass(fmass).setFriction(0.55).setRestitution(0.08).setCollisionGroups(G_FRESH), fb);
+    const col = G.world.createCollider(RAPIER.ColliderDesc.cuboid(he.x, he.y, he.z).setMass(fmass).setFriction(0.84).setRestitution(0.05).setCollisionGroups(G_FRESH), fb);
     G.colColor.set(col.handle, mat.color ? mat.color.clone() : new THREE.Color(0x888888));
     const fe = addEnt(fb, fm, { kind: 'chunk', mass: fmass });
     Object.assign(fe, { canShatter: false, prev: vel.clone(), started: false, cool: 0 });
@@ -3519,7 +3573,7 @@ function freeBlock(e, v, freed) {
 }
 
 // ============================================================ explosions and fx
-function explosion(pos, radius, power, quiet) {
+function explosion(pos, radius, power, quiet, lift = 0.5) {
   const L = LIGHTS.reduce((a, b) => (b.t0 < a.t0 ? b : a));
   L.t0 = G.simTime; L.r = radius; L.l.distance = radius * 8; L.l.position.copy(pos).add(new V3(0, radius * 0.5, 0));
   const pc = radius < 4 ? 0.45 : 1, low = pos.y - groundHeightAt(pos.x, pos.z) < radius * 1.2;
@@ -3541,8 +3595,8 @@ function explosion(pos, radius, power, quiet) {
     if (b.bodyType() !== RAPIER.RigidBodyType.Dynamic) continue;
     const bp = rv(b.translation()), d = bp.clone().sub(pos), dist = d.length();
     if (dist > reach) continue;
-    const f = 1 - dist / reach, dir = (dist > 0.05 ? d.normalize() : new V3(0, 1, 0)).add(new V3(0, 0.5, 0)).normalize();
-    const mass = b.mass(), dv = Math.min(power * f / mass, (e.kind === 'person' ? 14 : 40) * f);
+    const f = 1 - dist / reach, dir = (dist > 0.05 ? d.normalize() : new V3(0, 1, 0)).add(new V3(0, lift, 0)).normalize();
+    const mass = b.mass(), dv = Math.min(power * f / mass, (e.kind === 'person' ? 14 : (lift < 0.2 ? 14 : 40)) * f);
     b.applyImpulseAtPoint(dir.multiplyScalar(dv * mass), bp.add(rvec(0.25)), true);
     if (e.prev) { e.prev.copy(rv(b.linvel())); e.cool = 0.3; }
     if (e.kind === 'tank' && dist < reach * 0.7) trigger(e, 0.08 + dist * 0.012);
@@ -4498,6 +4552,7 @@ function rig(v, dt, realDt) {
 
 function render() {
   const W = innerWidth, H = innerHeight;
+  if (G.decals) for (const d of G.decals) d.visible = !R.replay || REC.cursor >= d.userData.t;
   layoutRects();
   const f = CAM.fPos, S = G.P.S, ext = 140 * Math.sqrt(S);
   // snap the shadow camera to whole shadow-map texels so shadows do not shimmer as the focus moves
