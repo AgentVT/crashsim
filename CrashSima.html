@@ -121,7 +121,7 @@ const AIRCRAFT = [
   { name: 'AH-64 Apache', style: 'heli', heli: true, S: 1.0, mass: 8000, thrust: 0, area: 20, vmax: 82, min_speed: 0, roll: 1, pitch: 1, yaw: 1, gun: true, ammo: 1200, gunRate: 10.4, gunV: 805, gunDmg: 6, rockets: 38, hellfires: 8, drag: 6.7 },
   // C-130: four turboprops, so thrust falls off with speed like the light prop's. F/A-18: M61 gun and six heat-seeking AIM-9s that lock on to other aircraft
   { name: 'C-130 Hercules', style: 'c130', S: 2.98, mass: 60000, thrust: 230000, area: 162, vmax: 150, min_speed: 50, roll: 0.8, pitch: 0.5, yaw: 0.3, props: 4 },
-  { name: 'F/A-18 Hornet', style: 'f18', S: 1.83, mass: 21000, thrust: 160000, area: 46, vmax: 300, min_speed: 62, roll: 3.4, pitch: 1.5, yaw: 0.6, gun: true, ammo: 578, gunRate: 100, gunV: 1050, gunDmg: 3, aams: 6 },
+  { name: 'F/A-18 Hornet', style: 'f18', S: 1.83, mass: 21000, thrust: 160000, area: 46, vmax: 300, min_speed: 62, roll: 3.4, pitch: 1.8, yaw: 0.6, lift: 1.15, stallA: 0.36, fbw: { aoa: 0.34, g: 7.5 }, gun: true, ammo: 578, gunRate: 100, gunV: 1050, gunDmg: 3, aams: 6 },
 ];
 const SCENARIOS = [
   { name: 'Downtown', desc: 'Dive into three concrete towers', start: [0, 170, 760], target: [0, 16, 0], speed: 75, cam: [75, 10, 85], ap: true },
@@ -149,7 +149,7 @@ const SCENARIOS = [
 const MODES = ['Chase', 'Cockpit', 'Wing', 'Tower', 'Flyby', 'Orbit', 'Top', 'Free'];
 const HELP = [
   ['Fly', 'W/S or Up/Down pitch   A/D or Left/Right roll   Q/E rudder'],
-  ['Power', 'Shift/Ctrl throttle   Space boost   G gear up/down   O autopilot on/off   F invert pitch'],
+  ['Power', 'Shift/Ctrl throttle   Space boost   G gear up/down   O autopilot on/off   F invert pitch   Shift+E eject'],
   ['Gun', 'A-10 only: hold Enter or left mouse to fire the 30 mm GAU-8 (1,150 rounds)'],
   ['Bombs', 'A-10 and B-2: U drops a 227 kg bomb (A-10 6, B-2 50 in two internal bays; hold U to ripple)'],
   ['Apache', 'Shift/Ctrl collective (50% hovers)   W/S cyclic forward/back   A/D cyclic left/right   Q/E pedals   Enter 30 mm gun   U Hydra rockets   K Hellfire (locks the target nearest the nose)'],
@@ -2554,9 +2554,9 @@ function engineFactor(P) { // share of engines still on: one for the light prop,
   let n = 0, on = 0; for (const k in P.parts) if (k.startsWith('engine')) { n++; if (P.parts[k].attached) on++; }
   return n ? on / n : 0;
 }
-function CL(a) {
-  if (Math.abs(a) < 0.28) return 0.25 + 5 * a;
-  const peak = 0.25 + 5 * 0.28 * Math.sign(a), over = Math.abs(a) - 0.28;
+function CL(a, sa = 0.28) { // sa: the angle of attack where lift peaks
+  if (Math.abs(a) < sa) return 0.25 + 5 * a;
+  const peak = 0.25 + 5 * sa * Math.sign(a), over = Math.abs(a) - sa;
   return lerp(peak, Math.sin(2 * a) * 0.9, clamp(over / 0.3, 0, 1));
 }
 function planeContacts(P) {
@@ -2605,26 +2605,26 @@ function planeTick(P, dt) {
   const F = new V3(), lv = v.clone().applyQuaternion(qi);
   const thr = spec.thrust * P.throttle * engineFactor(P) * (P.boost ? 1.3 : 1) * (spec.style === 'prop' || spec.props ? Math.max(0.25, 1 - 0.55 * speed / spec.vmax) : 1);
   F.addScaledVector(fwd, thr);
-  const qd = 0.5 * 1.225 * speed * speed, A = spec.area;
+  const qd = 0.5 * 1.225 * speed * speed, A = spec.area, AL = A * (spec.lift || 1); // AL: lifting area (the F/A-18's leading-edge extensions add to the wing)
   const wa = nm => (P.parts[nm].attached ? 0.6 : 0) + (P.parts[nm + 'o'].attached ? 0.4 : 0), wmin = Math.min(wa('wing_l'), wa('wing_r'));
   let beta = 0, cl = 0, gam = 0;
   const com = rv(b.worldCom());
   if (speed > 2) {
     const vd = v.clone().divideScalar(speed);
     gam = Math.asin(clamp(vd.y, -1, 1));
-    P.aoa = Math.atan2(-lv.y, -lv.z); beta = Math.atan2(lv.x, -lv.z); cl = CL(P.aoa);
-    P.stalled = Math.abs(P.aoa) > 0.3 && speed > 5;
+    P.aoa = Math.atan2(-lv.y, -lv.z); beta = Math.atan2(lv.x, -lv.z); cl = CL(P.aoa, spec.stallA);
+    P.stalled = Math.abs(P.aoa) > (spec.stallA || 0.28) + 0.02 && speed > 5;
     const ld = right.clone().cross(vd);
     if (ld.length() > 0.01) {
       ld.normalize();
-      const half = qd * A * cl * 0.5;
+      const half = qd * AL * cl * 0.5;
       for (const [nm, wt] of WING_PANELS) {
         const p = P.parts[nm]; if (!p.attached) continue;
         const f = ld.clone().multiplyScalar(half * wt);
         const at = com.clone().add(new V3(p.center.x, p.center.y, 0).applyQuaternion(q));
         b.addForceAtPoint(f, at, true); F.add(f);
       }
-      const fl = ld.clone().multiplyScalar(qd * A * cl * 0.04); F.add(fl);
+      const fl = ld.clone().multiplyScalar(qd * AL * cl * 0.04); F.add(fl);
     }
     const cd = P.cd0 + 0.045 * cl * cl + (P.stalled ? 0.15 : 0) + (P.parts.gear.attached ? 0.025 * P.gearT : 0);
     F.addScaledVector(vd, -qd * A * cd).addScaledVector(right, -qd * A * 0.35 * Math.sin(beta));
@@ -2632,7 +2632,7 @@ function planeTick(P, dt) {
   // F minus the per-wing lift already applied at points
   const central = F.clone();
   for (const [nm, wt] of WING_PANELS) if (P.parts[nm].attached && speed > 2) {
-    const ld = right.clone().cross(v.clone().divideScalar(speed)); if (ld.length() > 0.01) central.addScaledVector(ld.normalize(), -qd * A * cl * 0.5 * wt);
+    const ld = right.clone().cross(v.clone().divideScalar(speed)); if (ld.length() > 0.01) central.addScaledVector(ld.normalize(), -qd * AL * cl * 0.5 * wt);
   }
   b.addForce(central, true);
   P.expAcc.copy(F).divideScalar(P.mass).add(new V3(0, -9.81, 0));
@@ -2641,7 +2641,7 @@ function planeTick(P, dt) {
   const auth = clamp(qd / (0.5 * 1.225 * spec.min_speed ** 2), 0, 1.6);
   const tailH = P.parts.tail_h.attached, tailV = P.parts.tail_v.attached, rollAuth = wmin > 0.99 ? 1 : wmin > 0.5 ? 0.55 : 0.25;
   let aoaTrim = 0;
-  if (qd > 1) { const an = 9.8 * Math.cos(gam) * clamp(up.y, 0, 1) - 0.35 * gam * speed; aoaTrim = clamp((P.mass * an / (qd * A * 1.04) - 0.25) / 5, -0.1, 0.22); }
+  if (qd > 1) { const an = 9.8 * Math.cos(gam) * clamp(up.y, 0, 1) - 0.35 * gam * speed; aoaTrim = clamp((P.mass * an / (qd * AL * 1.04) - 0.25) / 5, -0.1, 0.22); }
   const wd = new V3();
   if (P.autopilot) {
     const td = P.apTarget.clone().sub(pos).normalize(), vd2 = speed > 1 ? v.clone().normalize() : fwd;
@@ -2654,6 +2654,10 @@ function planeTick(P, dt) {
     if (Math.abs(P.inR) < 0.1) wd.z += -right.y * 0.6;
     if (tailH) wd.x += -clamp(P.aoa - aoaTrim, -0.4, 0.4) * 2.5;
     if (tailV) wd.y += -clamp(beta, -0.5, 0.5) * 2;
+    if (spec.fbw && tailH && qd > 1) { // fly-by-wire: full stick holds the angle of attack at the limit or at the g limit, whichever comes first
+      const aG = (spec.fbw.g * P.mass * 9.81 / (qd * AL * 1.04) - 0.25) / 5, lim = Math.min(spec.fbw.aoa, aG);
+      if (P.aoa > lim) wd.x -= (P.aoa - lim) * 14; else if (P.aoa < -lim * 0.6) wd.x += (-lim * 0.6 - P.aoa) * 14;
+    }
   }
   const err = wd.sub(wl);
   const tq = new V3(P.I.x * err.x * (tailH ? 4 : 0.05), P.I.y * err.y * (tailV ? 3 : 0.05), P.I.z * err.z * 5 * rollAuth).multiplyScalar(auth);
@@ -3880,6 +3884,7 @@ function peopleTick(dt) {
   for (const e of G.people) {
     const b = e.body; if (!b) continue;
     const v = b.linvel(), sp = Math.hypot(v.x, v.y, v.z);
+    if (e.chuteAt && chuteTick(e, b, v, dt)) continue;
     if (e.st === 'fly') {
       // limbs flail while airborne or tumbling
       e.ph += dt * (6 + sp * 0.3);
@@ -3902,7 +3907,7 @@ function peopleTick(dt) {
       if (e.upT >= 1) { e.st = 'walk'; e.cmd.set(0, 0, 0); }
     } else if (e.st === 'swim') {
       // front crawl away from the wreck, then for the nearer bank; stands up once the feet touch bottom
-      const pos = e.obj.position, Pf = G.P, ctl = Pf && e === Pf.pilotEnt && Pf.crashed && Pf.foot && !R.replay;
+      const pos = e.obj.position, Pf = G.P, ctl = Pf && e === Pf.pilotEnt && (Pf.crashed || Pf.ejected) && Pf.foot && !R.replay;
       if (Math.hypot(v.x - e.cmd.x, v.z - e.cmd.z) > 5 || v.y > 4) { e.st = 'fly'; e.calm = 0; b.lockRotations(false, true); b.collider(0).setFriction(0.7); continue; }
       const land = Math.sign(pos.x - RIVER.cx) || 1;
       if (groundHeightAt(pos.x, pos.z) > RIVER.y - 0.3) {
@@ -3928,7 +3933,7 @@ function peopleTick(dt) {
       const Pf = G.P, ctl = Pf && e === Pf.pilotEnt && Pf.onFoot; // the player's pilot only goes down to a real hit, not a wall or rubble
       const intoRiver = inRiver(e.obj.position.x) && e.obj.position.y < RIVER.y + 0.3 && groundHeightAt(e.obj.position.x, e.obj.position.z) < RIVER.y - 0.5; // walked off the bank: back to swimming
       if (intoRiver || Math.hypot(v.x - e.cmd.x, v.z - e.cmd.z) > (ctl ? 10 : 4) || v.y > (ctl ? 5 : 3)) { e.st = 'fly'; e.calm = 0; b.lockRotations(false, true); b.collider(0).setFriction(0.7); continue; }
-      if (Pf && e === Pf.pilotEnt && Pf.crashed && Pf.foot && !R.replay) { // the player walks the pilot
+      if (Pf && e === Pf.pilotEnt && (Pf.crashed || Pf.ejected) && Pf.foot && !R.replay) { // the player walks the pilot
         if (!Pf.onFoot) { Pf.onFoot = true; Pf.throttle = 0; flash(SET.touch ? 'On foot: stick to walk, BOOST to run' : 'On foot: W/S walk, A/D turn, Shift run. R to fly again', 4); }
         const ft = Pf.foot; e.yaw -= ft.t * 2.4 * dt; if (ft.f || ft.t) Pf.footMoved = true;
         const spd = ft.f > 0 ? ft.f * (ft.run ? 6 : 2.6) : ft.f * 1.4, fx = -Math.sin(e.yaw) * spd, fz = -Math.cos(e.yaw) * spd;
@@ -3952,6 +3957,52 @@ function peopleTick(dt) {
       for (let k = 0; k < 2; k++) { const sw = Math.sin(e.ph + k * Math.PI) * (spd > 2 ? 0.75 : 0.45); e.legs[k].rotation.set(sw, 0, 0); e.arms[k].rotation.set(-sw * 0.9, 0, (k ? -1 : 1) * 0.08); }
     }
   }
+}
+// ============================================================ ejection (Shift+E)
+// The seat fires the pilot up and clear of the aircraft; the canopy opens 1.4 s later and brings them down at about 5 m/s.
+// The empty aircraft flies on hands off until it hits something. On the ground (or in the river) the sticks walk or swim the pilot.
+function eject(P) {
+  if (!P || !P.body || P.destroyed || P.ejected || P.onFoot || R.replay) return;
+  const b = P.body, q = rq(b.rotation()), up = new V3(0, 1, 0).applyQuaternion(q), C = P.cabin, S = P.S;
+  const wp = new V3(0, C.y + C.w / 1.2 + 1.1 * S, C.z0 + 0.6 * S).applyQuaternion(q).add(rv(b.translation()));
+  const e = makePerson(wp, rv(b.linvel()).addScaledVector(up, 42), P.crew === 'crew' ? 'crew' : 'pilot'); if (!e) return;
+  P.ejected = true; P.autopilot = false; idleControls(P); P.pilotEnt = e; P.pax = Math.max(0, P.pax - 1); P.onFoot = true;
+  e.chuteAt = G.simTime + 1.4; freshTimer(e, 1.2);
+  PFX.burst(false, wp, 18, 1.6, 2.2 * S, [0.8, 0.78, 0.75, 0.85], [0.9, 0.9, 0.9], 2, 9, -0.5, 1.2, 0);
+  SFX.play('crunch', 0.35); flash('Ejected!', 1.5);
+}
+let _chuteGeo, _chuteMat;
+function pilotChute() {
+  if (!_chuteGeo) {
+    _chuteGeo = new THREE.SphereGeometry(3.4, 18, 6, 0, Math.PI * 2, 0, Math.PI * 0.42);
+    _chuteMat = new THREE.MeshStandardMaterial({ side: THREE.DoubleSide, roughness: 0.9, map: canvasTex(256, 16, g => { for (let i = 0; i < 12; i++) { g.fillStyle = i % 2 ? '#f4f4f2' : '#ef6a1c'; g.fillRect(i * 256 / 12, 0, 256 / 12 + 1, 16); } }) });
+  }
+  const g = new THREE.Group(), can = new THREE.Mesh(_chuteGeo, _chuteMat); can.position.y = 4.6; can.scale.y = 0.6; can.castShadow = true; g.add(can);
+  const rimR = 3.4 * Math.sin(Math.PI * 0.42), rimY = 4.6 + 0.6 * 3.4 * Math.cos(Math.PI * 0.42), pts = [];
+  for (let k = 0; k < 10; k++) { const a = k / 10 * Math.PI * 2; pts.push(k % 2 ? 0.18 : -0.18, 0.45, 0, Math.cos(a) * rimR, rimY, Math.sin(a) * rimR); }
+  const lg = new THREE.BufferGeometry(); lg.setAttribute('position', new THREE.Float32BufferAttribute(pts, 3));
+  g.add(new THREE.LineSegments(lg, new THREE.LineBasicMaterial({ color: 0x2a2a2a })));
+  return g;
+}
+// returns true while the canopy is up (the person's other states wait)
+function chuteTick(e, b, v, dt) {
+  if (!e.chute) {
+    if (G.simTime < e.chuteAt) return false; // still on the seat's climb, tumbling
+    e.chute = pilotChute(); e.chute.scale.setScalar(0.15); e.obj.add(e.chute); e.chuteT = G.simTime;
+    b.lockRotations(true, true); b.setAngvel({ x: 0, y: 0, z: 0 }, true); e.st = 'fly';
+  }
+  const pos = e.obj.position, age = G.simTime - e.chuteT, gnd = groundHeightAt(pos.x, pos.z);
+  if (pos.y - gnd < 1.1 || (inRiver(pos.x) && pos.y < RIVER.y + 0.6) || (age > 1.5 && v.y > -1.2) || age > 240) { // down: the canopy is let go
+    e.obj.remove(e.chute); e.chute = null; e.chuteAt = null; b.lockRotations(false, true); e.calm = 0;
+    const Pf = G.P; if (Pf && e === Pf.pilotEnt && Pf.ejected && !Pf.crashed) flash(SET.touch ? 'On foot: stick to walk, BOOST to run' : 'On foot: W/S walk, A/D turn, Shift run. R to fly again', 4);
+    return false;
+  }
+  e.chute.scale.setScalar(Math.min(1, 0.15 + age * 1.6));
+  const k = Math.min(1, dt * 3); // drag pulls toward a target that leaves gravity balanced at a 5 m/s sink
+  b.setLinvel({ x: v.x * (1 - k), y: lerp(v.y, -5.2 + 9.81 / 3, k), z: v.z * (1 - k) }, true);
+  _pq.setFromEuler(_pe.set(Math.sin(G.simTime * 0.9 + e.ph) * 0.12, e.yaw, Math.sin(G.simTime * 0.7 + e.ph * 2) * 0.1)); b.setRotation(_pq, true);
+  for (let i = 0; i < 2; i++) { e.arms[i].rotation.set(0, 0, (i ? -1 : 1) * 2.75); e.legs[i].rotation.set(Math.sin(G.simTime * 1.3 + i * 2 + e.ph) * 0.15, 0, (i ? -1 : 1) * 0.06); }
+  return true;
 }
 function lerpAngle(a, b, t) { let d = ((b - a + Math.PI) % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI) - Math.PI; return a + d * clamp(t, 0, 1); }
 
@@ -4930,7 +4981,7 @@ function footInput() { // f forward (-1..1), t turn right, run
 }
 function controls(dt) {
   const P = G.P;
-  const pe = P.pilotEnt; P.foot = P.crashed && pe && pe.vis && pe.st === 'walk' ? footInput() : null; // out of the wreck: the sticks walk the pilot
+  const pe = P.pilotEnt; P.foot = (P.crashed || P.ejected) && pe && pe.vis && (pe.st === 'walk' || pe.st === 'swim') ? footInput() : null; // out of the wreck: the sticks walk or swim the pilot
   if (P.destroyed || P.onFoot) return;
   let pitch = ax('KeyS', 'KeyW') + ax('ArrowDown', 'ArrowUp'), roll = ax('KeyD', 'KeyA') + ax('ArrowRight', 'ArrowLeft'), yaw = ax('KeyE', 'KeyQ');
   let thr = (KEYS.ShiftLeft || KEYS.ShiftRight ? 1 : 0) - (KEYS.ControlLeft || KEYS.ControlRight ? 1 : 0);
@@ -4981,6 +5032,7 @@ function onKey(c, shift = false) {
   if (c === 'Digit0') { if (shift) { setMute(undefined, !SET.muteVoice); flash(SET.muteVoice ? 'Voice off' : 'Voice on', 1); } else { setMute(!SET.mute); flash(SET.mute ? 'Sound off' : 'Sound on', 1); } return; }
   if (R.menu) return;
   if (c === 'KeyF' && shift) { dropFlares(G.P); return; } // not in the help or the menu
+  if (c === 'KeyE' && shift) { eject(G.P); return; }
   if (/^Digit[1-8]$/.test(c)) {
     const m = +c[5] - 1;
     if (shift) { VIEWS[1].mode = m; VIEWS[1].st = {}; CAM.layout = 1; }
