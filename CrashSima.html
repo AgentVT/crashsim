@@ -165,7 +165,7 @@ const HELP = [
   ['Time', 'T slow motion 0.25x   Y instant replay'],
   ['Replay', 'Space pause   Left/Right scrub 1 s   Up/Down speed   Home jump to impact   Y exit'],
   ['Perf', '` FPS and body counts   X graphics quality High / Medium / Low'],
-  ['Zombies', 'Zombie siege: waves every 45 s walk in along the streets. Each one that reaches the plaza costs 2% of the city. Ammo and bombs refill every wave. R scrambles a new aircraft, Shift+R restarts'],
+  ['Zombies', 'Zombie siege: waves every 45 s walk in along the streets. Each one that reaches the plaza costs 2% of the city. Ammo and bombs refill every wave. Fly through the pink ring for a kill frenzy. R scrambles a new aircraft, Shift+R restarts'],
   ['Sound', '0 sound on/off   Shift+0 cockpit voice on/off (also in the menu and the touch bar)'],
   ['Cockpit', 'F-16 voice: alarm + caution (damage), altitude / pull up (terrain, sink, gear), warning (stall, engine), caution (bank, overspeed), lock (bomb pipper on armor), bingo (gun and bombs empty). Autopilot chime on, wailer off'],
   ['Touch', 'Z or the top button shows on-screen stick, throttle, rudder and buttons. Drag the view to look, pinch to zoom'],
@@ -4048,6 +4048,7 @@ function zbMake(p, ci, speed) {
 function zbStart() {
   G.zombies = []; G.zbId = 0; G.zb = { wave: 0, nextWave: 6, health: 100, kills: 0, breaches: 0, lost: false, grid: new Map(), board: {} }; MP.lastWave = 0;
   zbMeshes();
+  frenzyInit();
 }
 function zbHurt(z, dir, dmg = 1) {
   if (z.dead) return; z.hp -= dmg;
@@ -4061,6 +4062,7 @@ function killZombie(z, vel) {
   if (MP.on && !MP.host) { if (by === MP.id) MP.send({ t: 'zk', id: z.id, v: z.v.toArray().map(x => Math.round(x * 10) / 10) }); }
   else { G.zb.kills++; if (MP.on) { G.zb.board[by] = (G.zb.board[by] || 0) + 1; MP.killQ.push([z.id, ...z.v.toArray().map(x => Math.round(x * 10) / 10)]); } }
   PFX.burst(false, z.p.clone().add(new V3(0, 1, 0)), 8, 1.2, 0.7, [0.3, 0.05, 0.03, 0.9], [0.22, 0.06, 0.04], 2, 6, -9.8, 1, 3);
+  frenzyCredit(by);
 }
 // zombies within r of p (horizontal), from the per-step grid
 function zbNear(p, r, fn) {
@@ -4125,6 +4127,17 @@ function zombiesTick(dt) {
       if (z.tp) { const k = 1 - Math.exp(-dt * 5); z.p.x += (z.tp.x - z.p.x) * k; z.p.z += (z.tp.z - z.p.z) * k; z.yaw = lerpAngle(z.yaw, z.tyaw ?? z.yaw, dt * 6); }
       z.p.y = groundHeightAt(z.p.x, z.p.z); z.ph += dt * z.speed * 3.2; continue;
     }
+    if (z.hunt) { // kill-frenzy fodder: chase the pilot who started it, and do not count as a plaza breach
+      let tx = z.hunt.x, tz = z.hunt.z;
+      if (z.owner === (MP.on ? MP.id : 0) && P && P.ent) { tx = P.ent.obj.position.x; tz = P.ent.obj.position.z; }
+      else if (MP.on) { const rm = MP.remotes.get(z.owner); if (rm && rm.pos) { tx = rm.pos.x; tz = rm.pos.z; } }
+      z.hunt.set(tx, 0, tz);
+      const dx = tx - z.p.x, dz = tz - z.p.z, dist = Math.hypot(dx, dz), want = Math.atan2(dx, dz);
+      z.yaw = lerpAngle(z.yaw, want, dt * 3);
+      const sp = z.speed * (0.85 + 0.2 * Math.sin(G.simTime * 1.7 + z.sway));
+      if (dist > 8) { z.p.x += Math.sin(z.yaw) * sp * dt; z.p.z += Math.cos(z.yaw) * sp * dt; }
+      z.p.y = groundHeightAt(z.p.x, z.p.z); z.ph += dt * sp * 3.2; continue;
+    }
     // walk the road into the centre: first along the lane, then along the cross street at plus or minus 32 m
     const x = z.p.x, zz = z.p.z; let tx = 0, tz = 0;
     if (z.side < 2) { const turn = Math.abs(z.lane) > ZB.PLAZA_X; if (turn && Math.abs(zz) > 34) { tx = z.lane; tz = Math.sign(zz) * 32; } else { tx = 0; tz = Math.sign(zz) * 32; if (!turn) { tx = z.lane; tz = 0; } } }
@@ -4141,6 +4154,7 @@ function zombiesTick(dt) {
       if (!Z.lost) { Z.health = Math.max(0, Z.health - 2); if (Z.health <= 0) { Z.lost = true; flash('THE CITY HAS FALLEN', 6); } else if (Z.breaches % 5 === 1) flash(`Zombies in the plaza. City ${Z.health}%`, 2); }
     }
   }
+  frenzyTick(dt);
   zbDraw();
 }
 const _zm = new THREE.Matrix4(), _zr = new THREE.Matrix4(), _zl = new THREE.Matrix4(), _zq = new Q4(), _zv = new V3(), _zs = new V3(), _ze = new THREE.Euler();
@@ -4197,6 +4211,7 @@ function drawZombieHud(W) {
   hx.fillStyle = 'rgba(4,6,10,0.6)'; hx.beginPath(); hx.arc(cx, cy, R0, 0, 7); hx.fill();
   hx.fillStyle = Z.health > 40 ? 'rgba(80,200,255,0.6)' : 'rgba(255,90,60,0.7)'; hx.fillRect(cx - ZB.PLAZA_X * k, cy - ZB.PLAZA_Z * k, 2 * ZB.PLAZA_X * k, 2 * ZB.PLAZA_Z * k);
   hx.fillStyle = '#8f6'; for (const z of G.zombies) if (!z.dead) hx.fillRect(cx + z.p.x * k - 1, cy + z.p.z * k - 1, 2, 2);
+  if (G.frenzy && G.frenzy.group) { const p = G.frenzy.group.position; hx.fillStyle = '#f4a'; hx.beginPath(); hx.arc(cx + clamp(p.x * k, -R0, R0), cy + clamp(p.z * k, -R0, R0), 4, 0, 7); hx.fill(); }
   const P = G.P; if (P && P.ent) { const p = P.ent.obj.position, f = new V3(0, 0, -1).applyQuaternion(P.ent.obj.quaternion), a = Math.atan2(f.z, f.x);
     hx.save(); hx.translate(cx + clamp(p.x * k, -R0, R0), cy + clamp(p.z * k, -R0, R0)); hx.rotate(a); hx.fillStyle = '#ffe680'; hx.beginPath(); hx.moveTo(7, 0); hx.lineTo(-5, -4); hx.lineTo(-5, 4); hx.fill(); hx.restore(); }
   if (MP.on) for (const r of MP.remotes.values()) if (r.P && !r.dead) { const p = r.pos, f = new V3(0, 0, -1).applyQuaternion(r.q), a = Math.atan2(f.z, f.x);
@@ -4215,6 +4230,145 @@ function drawZombieHud(W) {
   if (!Z.lost && Z.wave > 0) txt(`next wave ${Math.ceil(Z.nextWave)} s`, cx, cy + R0 + 60, 13, '#aaa', 'center');
   if (Z.lost) txt('THE CITY HAS FALLEN', W / 2, 140, 34, '#ff5a3a', 'center');
   if (P && (P.destroyed || (P.crashed && P.restT > 2))) txt('Press R to scramble another aircraft   Shift+R restarts the defence', W / 2, innerHeight - 70, 18, '#ffe680', 'center');
+  drawFrenzyHud(W);
+}
+// Kill frenzy: a local pink ring. Flying through it starts a 60 s hunt for 30 kills. The timer, combo and score stay on
+// the pilot who grabbed it. Extra zombies are spawned by whoever is simulating the horde (solo, or the host). A mirror
+// asks the host with a 'zf' message; the relay already forwards it, so server.js is unchanged.
+const FRENZY_NEED = 30, FRENZY_TIME = 60, FRENZY_COMBO = 2;
+function frenzyInit() {
+  G.frenzy = { on: false, need: FRENZY_NEED, time: FRENZY_TIME, kills: 0, combo: 1, peak: 1, lastKill: -99, until: 0, bannerT: 0, banner: '', bannerSub: '', ok: false, respawnAt: 0, nextPack: 0, group: null, baseY: 0, yaw0: 0, spin: 0 };
+  frenzyMakePickup(true);
+}
+function frenzySpot(first) {
+  const P = G.P && G.P.ent ? G.P.ent.obj.position : new V3(0, 120, 0);
+  if (first && G.P && G.P.ent) {
+    const dir = new V3(0, 0, -1).applyQuaternion(G.P.ent.obj.quaternion); dir.y = 0; if (dir.lengthSq() < 1e-4) dir.set(0, 0, -1); dir.normalize();
+    const side = new V3(dir.z, 0, -dir.x);
+    return P.clone().addScaledVector(dir, 110).addScaledVector(side, 32).setY(P.y + 4);
+  }
+  for (let t = 0; t < 10; t++) {
+    const lane = (Math.floor(rnd() * 15) - 7) * 64 + 32, along = (rnd() - 0.5) * 1400, across = rnd() < 0.5;
+    const x = across ? lane : along, z = across ? along : lane, d = Math.hypot(x - P.x, z - P.z);
+    if (d < 220 || d > 720) continue;
+    return new V3(x, groundHeightAt(x, z) + 50 + rnd() * 36, z);
+  }
+  return new V3(P.x + 260, P.y + 8, P.z + 40);
+}
+function frenzyMakePickup(first) {
+  const F = G.frenzy; if (!F || !G.root) return;
+  if (F.group) { G.root.remove(F.group); F.group = null; }
+  const p = frenzySpot(first), g = new THREE.Group();
+  const ring = new THREE.Mesh(new THREE.TorusGeometry(14, 0.7, 8, 28), new THREE.MeshBasicMaterial({ color: 0xff44cc }));
+  const core = new THREE.Mesh(new THREE.SphereGeometry(2.1, 12, 10), new THREE.MeshBasicMaterial({ color: 0xffe14a }));
+  const beam = new THREE.Mesh(new THREE.CylinderGeometry(0.45, 0.45, 90, 8, 1, true), new THREE.MeshBasicMaterial({ color: 0xff44cc, transparent: true, opacity: 0.28, side: THREE.DoubleSide, depthWrite: false }));
+  beam.position.y = -30;
+  const light = new THREE.PointLight(0xff44cc, 6, 90);
+  g.add(ring, core, beam, light); g.position.copy(p); G.root.add(g);
+  const ang = rnd() * Math.PI * 2;
+  const fwd = first && G.P && G.P.ent ? new V3(0, 0, -1).applyQuaternion(G.P.ent.obj.quaternion) : new V3(Math.sin(ang), 0, Math.cos(ang));
+  F.group = g; F.ring = ring; F.core = core; F.baseY = p.y; F.yaw0 = Math.atan2(fwd.x, fwd.z); F.spin = 0;
+}
+function frenzySpawnPack(n, origin, owner) {
+  if (!G.zombies || !G.zb || (MP.on && !MP.host) || !origin) return;
+  n = Math.min(Math.max(n | 0, 1), 24); owner = owner || 0;
+  let near = 0;
+  for (const z of G.zombies) if (!z.dead && z.owner === owner && Math.hypot(z.p.x - origin.x, z.p.z - origin.z) < 220) near++;
+  if (near >= 18) return;
+  for (let i = 0; i < n && G.zombies.length < ZB.MAX && near < 18; i++, near++) {
+    const a = rnd() * Math.PI * 2, d = 42 + rnd() * 70;
+    const p = new V3(origin.x + Math.sin(a) * d, 0, origin.z + Math.cos(a) * d);
+    p.y = groundHeightAt(p.x, p.z);
+    const ci = Math.floor(rnd() * ZB_SKIN.length) + 5 * Math.floor(rnd() * ZB_SHIRT.length) + 30 * Math.floor(rnd() * ZB_PANTS.length);
+    const z = zbMake(p, ci, 6.2 + rnd() * 1.6);
+    z.hunt = new V3(origin.x, 0, origin.z); z.owner = owner; z.id = ++G.zbId; G.zombies.push(z);
+  }
+}
+function frenzyRelease(owner) {
+  if (!G.zombies || (MP.on && !MP.host)) return;
+  for (const z of G.zombies) if (!z.dead && z.hunt && z.owner === owner) {
+    delete z.hunt;
+    const ax = Math.abs(z.p.x), az = Math.abs(z.p.z);
+    if (az >= ax) { z.side = z.p.z > 0 ? 0 : 1; z.lane = z.p.x; } else { z.side = z.p.x > 0 ? 2 : 3; z.lane = z.p.z; }
+  }
+}
+function frenzyLivingNear(p) {
+  let n = 0; for (const z of G.zombies) if (!z.dead && Math.hypot(z.p.x - p.x, z.p.z - p.z) < 220) n++; return n;
+}
+function frenzyFill(n, force) {
+  const P = G.P; if (!P || !P.ent || !G.frenzy) return;
+  const p = P.ent.obj.position;
+  if (!force && frenzyLivingNear(p) >= 12) return;
+  const who = MP.on ? MP.id : 0;
+  if (!MP.on || MP.host) frenzySpawnPack(n, p, who);
+  else MP.send({ t: 'zf', p: [Math.round(p.x), Math.round(p.y), Math.round(p.z)], n });
+}
+function frenzyBegin() {
+  const F = G.frenzy; if (!F || F.on) return;
+  if (F.group) { G.root.remove(F.group); F.group = null; }
+  F.on = true; F.kills = 0; F.combo = 1; F.peak = 1; F.lastKill = -99; F.until = G.simTime + F.time; F.bannerT = 0; F.nextPack = G.simTime + 5;
+  flash(`KILL FRENZY: kill ${F.need} zombies in ${F.time} seconds`, 3.2);
+  frenzyFill(16, true);
+}
+function frenzyEnd(passed) {
+  const F = G.frenzy; if (!F || !F.on) return;
+  F.on = false;
+  const left = Math.max(0, Math.ceil(F.until - G.simTime)), bonus = passed ? left * 20 : 0, score = F.kills * F.peak * 100 + bonus;
+  F.ok = passed; F.banner = passed ? 'FRENZY PASSED' : 'FRENZY FAILED';
+  F.bannerSub = passed ? `${score}    ${F.kills} x${F.peak}  +  ${bonus} time` : `${score}    ${F.kills}/${F.need}  x${F.peak}`;
+  F.bannerT = 4.5; F.respawnAt = G.simTime + 8;
+  const who = MP.on ? MP.id : 0;
+  if (MP.on && !MP.host) MP.send({ t: 'zf', stop: 1 }); else frenzyRelease(who);
+}
+function frenzyCredit(by) {
+  const F = G.frenzy; if (!F || !F.on) return;
+  if (MP.on && by !== MP.id) return;
+  const gap = G.simTime - F.lastKill;
+  F.combo = F.lastKill < 0 || gap > FRENZY_COMBO ? 1 : Math.min(8, F.combo + 1);
+  if (F.combo > F.peak) F.peak = F.combo;
+  F.lastKill = G.simTime; F.kills++;
+  if (F.kills >= F.need) frenzyEnd(true);
+}
+function frenzyTick(dt) {
+  const F = G.frenzy; if (!F) return;
+  if (F.bannerT > 0) F.bannerT = Math.max(0, F.bannerT - dt);
+  if (F.group) {
+    F.spin += dt * 0.7; F.group.position.y = F.baseY + Math.sin(G.simTime * 2) * 2.2;
+    const fwd = new V3(Math.sin(F.yaw0 + F.spin), 0, Math.cos(F.yaw0 + F.spin));
+    F.ring.quaternion.setFromUnitVectors(new V3(0, 0, 1), fwd);
+    const c = 0.5 + 0.5 * Math.sin(G.simTime * 5);
+    F.ring.material.color.setRGB(1, 0.2 + 0.45 * c, 0.75 + 0.2 * c);
+    F.core.scale.setScalar(0.85 + 0.25 * c);
+    const P = G.P;
+    if (!F.on && P && P.body && !P.destroyed) {
+      const pp = rv(P.body.translation());
+      if (pp.distanceTo(F.group.position) < 18) frenzyBegin();
+    }
+  } else if (!F.on && F.respawnAt && G.simTime >= F.respawnAt) { F.respawnAt = 0; frenzyMakePickup(false); }
+  if (!F.on) return;
+  if (G.simTime >= F.until) { frenzyEnd(false); return; }
+  if (G.simTime >= F.nextPack) { F.nextPack = G.simTime + 4; frenzyFill(8, false); }
+}
+function drawFrenzyHud(W) {
+  const F = G.frenzy; if (!F) return;
+  if (F.on) {
+    const left = Math.max(0, F.until - G.simTime);
+    txt('KILL FRENZY', W / 2, 112, 26, '#ff5ad0', 'center');
+    txt(`${Math.ceil(left)}`, W / 2, 154, 40, left < 10 ? '#ff6a4a' : '#fff', 'center');
+    txt(`${F.kills} / ${F.need}`, W / 2, 184, 22, '#ffe680', 'center');
+    txt(`x${F.combo}`, W / 2, 212, 26, '#ff9a3a', 'center');
+    if (F.combo > 1) { const u = clamp(1 - (G.simTime - F.lastKill) / FRENZY_COMBO, 0, 1); hx.fillStyle = 'rgba(255,154,58,0.9)'; hx.fillRect(W / 2 - 40, 222, 80 * u, 4); }
+  } else if (F.group && F.bannerT <= 0 && G.P && G.P.ent) {
+    const d = G.P.ent.obj.position.distanceTo(F.group.position);
+    txt(`KILL FRENZY  ${d < 1000 ? Math.round(d) + ' m' : (d / 1000).toFixed(1) + ' km'}`, W / 2, 112, 16, '#ff7ad8', 'center');
+  }
+}
+function drawFrenzyBanner(W, H) {
+  const F = G.frenzy; if (!F || F.bannerT <= 0) return;
+  const a = clamp(F.bannerT, 0, 1), y = H * 0.62;
+  hx.fillStyle = `rgba(4,6,10,${0.72 * a})`; hx.fillRect(W / 2 - 360, y, 720, 120);
+  txt(F.banner, W / 2, y + 52, 54, F.ok ? `rgba(120,255,150,${a})` : `rgba(255,90,58,${a})`, 'center');
+  txt(F.bannerSub, W / 2, y + 94, 26, `rgba(255,230,150,${a})`, 'center');
 }
 function rearm(P) {
   if (P.hard) for (const h of P.hard) if (P.parts[h.part] && P.parts[h.part].attached) h.mesh.visible = true;
@@ -4294,6 +4448,7 @@ const MP = {
         break;
       }
       case 'zk': if (this.host && G.zombies) { const z = G.zombies.find(q => q.id === m.id); if (z && !z.dead) { G.blame = m.from; killZombie(z, new V3(...m.v)); G.blame = null; } } break;
+      case 'zf': if (this.host && G.zombies) { if (m.stop) frenzyRelease(m.from); else if (m.p) frenzySpawnPack(m.n, new V3(m.p[0], m.p[1], m.p[2]), m.from); } break;
     }
   },
   // another pilot's aircraft: a visual copy of the builder's model with its physics body removed
@@ -4750,6 +4905,7 @@ function drawHud() {
     txt(`${PERF.fps.toFixed(0)} fps   physics ${PERF.stepMs.toFixed(1)} ms/step   bodies ${G.ents.length}   awake ${awake}   particles ${pts}   graphics ${QUAL[SET.quality].name}`, W / 2, 24, 15, '#9f9', 'center');
   }
   if (R.msgT > 0) txt(R.msg, W / 2, H * 0.3, 34, `rgba(255,217,77,${clamp(R.msgT, 0, 1)})`, 'center');
+  if (G.zb && !R.replay && !R.menu) drawFrenzyBanner(W, H);
 }
 // ---------------------------------------------------------------- race courses: rings flown in order against the clock
 function buildCourse(sc) {
@@ -5323,11 +5479,12 @@ function botTick() {
 
 resize();
 applyQuality();
-const showMenu = R.first;
+if (params.has('frenzy')) { SET.scenario = SCENARIOS.findIndex(s => s.zombies); if (!params.has('plane') && BOT < 0) SET.aircraft = SCENARIOS[SET.scenario].plane ?? 5; }
+const showMenu = R.first && !params.has('frenzy');
 startRun(SET.scenario, SET.aircraft);
 loadModels();
 if (showMenu) { R.first = true; openMenu(); R.first = false; }
-window.__api = { GLB, MP, SFX, explosion, launchMissile, zbSpawnHorde, zbRayHit, zbHurt, toggleReplay, REC, setGear, get G() { return G; }, R, CAM, VIEWS, scene, renderer, THREE, terrainAt, groundHeightAt, PFX, PERF };
+window.__api = { GLB, MP, SFX, explosion, launchMissile, zbSpawnHorde, zbRayHit, zbHurt, killZombie, frenzyBegin, frenzyFill, toggleReplay, REC, setGear, get G() { return G; }, R, CAM, VIEWS, scene, renderer, THREE, terrainAt, groundHeightAt, PFX, PERF };
 requestAnimationFrame(frame);
 </script>
 </body>
